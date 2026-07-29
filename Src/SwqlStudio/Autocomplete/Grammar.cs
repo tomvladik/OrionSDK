@@ -125,7 +125,8 @@ namespace SwqlStudio.Autocomplete
                 "max",
                 "avg",
                 "count",
-                "sum"
+                "sum",
+                "string_agg"
             };
 
         public static readonly string[] All = CreateOrdered();
