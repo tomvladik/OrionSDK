@@ -67,6 +67,7 @@ Aggregate functions operate on a whole group of values at once. If a `GROUP BY` 
 * `Max(n)` - Returns the largest value in the group.
 * `Min(n)` - Returns the smallest value in the group.
 * `Sum(n)` - Returns the arithmetic sum of the values in the group.
+* `String_Agg(expression, separator [, orderExpression [ASC | DESC]])` - Concatenates the non-`NULL` string values in the group into a single string, separated by `separator`. Both `expression` and `separator` are required. An optional ordering expression controls the order in which values are concatenated; its direction is optional and defaults to ascending. Returns `NULL` when the group has no non-`NULL` values.
 
 ## Array functions
 
