@@ -23,6 +23,7 @@ namespace SwqlStudio.ObjectExplorer
         private float _maxFontSize;
 
         // Only fonts created here may be disposed; Target.Font may be a shared ambient font (see DpiHelper.DefaultFont).
+        private Font _initialFont;
         private Font _ownedFont;
 
         private readonly float _step;
@@ -67,7 +68,17 @@ namespace SwqlStudio.ObjectExplorer
 
         public Control Target
         {
-            get => _target; set => _target = value;
+            get => _target;
+            set
+            {
+                if (ReferenceEquals(_target, value))
+                    return;
+
+                ReleaseOwnedFont();
+                _target = value;
+                _initialFontSize = null;
+                UpdateResetButton();
+            }
         }
 
         private void ChangeFont(int delta)
@@ -110,10 +121,21 @@ namespace SwqlStudio.ObjectExplorer
         private void ApplyFontSize(float size)
         {
             var currentFont = Target.Font;
-            var previouslyOwnedFont = _ownedFont;
 
-            _ownedFont = new Font(currentFont.FontFamily, size, currentFont.Style, currentFont.Unit);
-            Target.Font = _ownedFont;
+            if (_ownedFont != null && !ReferenceEquals(currentFont, _ownedFont))
+            {
+                _ownedFont.Dispose();
+                _ownedFont = null;
+            }
+
+            if (_ownedFont == null)
+                _initialFont = currentFont;
+
+            var previouslyOwnedFont = _ownedFont;
+            var newFont = new Font(currentFont.FontFamily, size, currentFont.Style, currentFont.Unit);
+
+            Target.Font = newFont;
+            _ownedFont = newFont;
 
             previouslyOwnedFont?.Dispose();
         }
@@ -121,12 +143,22 @@ namespace SwqlStudio.ObjectExplorer
         protected override void Dispose(bool disposing)
         {
             if (disposing)
-            {
-                _ownedFont?.Dispose();
-                _ownedFont = null;
-            }
+                ReleaseOwnedFont();
 
             base.Dispose(disposing);
+        }
+
+        private void ReleaseOwnedFont()
+        {
+            if (_ownedFont == null)
+                return;
+
+            if (_target != null && !_target.IsDisposed && ReferenceEquals(_target.Font, _ownedFont))
+                _target.Font = _initialFont;
+
+            _ownedFont.Dispose();
+            _ownedFont = null;
+            _initialFont = null;
         }
 
         private void UpdateResetButton()
