@@ -22,6 +22,9 @@ namespace SwqlStudio.ObjectExplorer
         private float _minFontSize;
         private float _maxFontSize;
 
+        // Only fonts created here may be disposed; Target.Font may be a shared ambient font (see DpiHelper.DefaultFont).
+        private Font _ownedFont;
+
         private readonly float _step;
 
         public FontSizeToolbar(float scaleFactor)
@@ -82,9 +85,7 @@ namespace SwqlStudio.ObjectExplorer
             if (Math.Abs(newSize - _target.Font.Size) < 0.01f)
                 return;
 
-            var oldFont = Target.Font;
-            Target.Font = new Font(oldFont.FontFamily, newSize, oldFont.Style, oldFont.Unit);
-            oldFont.Dispose();
+            ApplyFontSize(newSize);
 
             UpdateResetButton();
 
@@ -101,11 +102,31 @@ namespace SwqlStudio.ObjectExplorer
             if (Target == null || !_initialFontSize.HasValue)
                 return;
 
-            var oldFont = Target.Font;
-            Target.Font = new Font(oldFont.FontFamily, _initialFontSize.Value, oldFont.Style, oldFont.Unit);
-            oldFont.Dispose();
+            ApplyFontSize(_initialFontSize.Value);
 
             UpdateResetButton();
+        }
+
+        private void ApplyFontSize(float size)
+        {
+            var currentFont = Target.Font;
+            var previouslyOwnedFont = _ownedFont;
+
+            _ownedFont = new Font(currentFont.FontFamily, size, currentFont.Style, currentFont.Unit);
+            Target.Font = _ownedFont;
+
+            previouslyOwnedFont?.Dispose();
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _ownedFont?.Dispose();
+                _ownedFont = null;
+            }
+
+            base.Dispose(disposing);
         }
 
         private void UpdateResetButton()
