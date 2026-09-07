@@ -911,7 +911,7 @@ namespace SwqlStudio
 
         private void _connectionInfo_ConnectionClosed(object sender, EventArgs e)
         {
-            UpdateConnectionStatus(_connectionInfo_ConnectionClosed, QueryStatusBar.Disconnected, sender, e);
+            UpdateConnectionStatus(_connectionInfo_ConnectionClosed, null, sender, e);
         }
 
         private void _connectionInfo_ConnectionClosing(object sender, EventArgs e)
@@ -921,9 +921,10 @@ namespace SwqlStudio
 
         private void _connectionInfo_ConnectionRestored(object sender, EventArgs e)
         {
-            UpdateConnectionStatus(_connectionInfo_ConnectionRestored, QueryStatusBar.Connected, sender, e);
+            UpdateConnectionStatus(_connectionInfo_ConnectionRestored, null, sender, e);
         }
 
+        /// <param name="status">Literal to show, or null to re-read the live connection state.</param>
         private void UpdateConnectionStatus(EventHandler handler, string status, object sender, EventArgs e)
         {
             // The connection raises events from a background thread, so the tab may be torn down mid-flight.
@@ -944,7 +945,11 @@ namespace SwqlStudio
                 return;
             }
 
-            queryStatusBar1?.UpdateStatusLabel(status);
+            // A stale event can arrive after the connection closed, so trust the state, not the event.
+            if (status == null)
+                queryStatusBar1?.ShowConnectionState();
+            else
+                queryStatusBar1?.UpdateStatusLabel(status);
         }
     }
 }

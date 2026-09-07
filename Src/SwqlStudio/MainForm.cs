@@ -146,16 +146,22 @@ namespace SwqlStudio
 
         private void ConnectionOnConnectionClosed(object sender, EventArgs e)
         {
-            var connection = sender as ConnectionInfo;
-            if (connection == SelectedConnection)
-                SetExecuteDisconnectedVisual();
+            RefreshExecuteVisualFor(sender);
         }
 
         private void ConnectionOnConnectionRestored(object sender, EventArgs e)
         {
+            RefreshExecuteVisualFor(sender);
+        }
+
+        private void RefreshExecuteVisualFor(object sender)
+        {
             var connection = sender as ConnectionInfo;
-            if (connection == SelectedConnection)
-                SetExecuteNormalVisual();
+            if (connection != SelectedConnection)
+                return;
+
+            // A stale event can arrive after the connection closed, so trust the state, not the event.
+            UpdateExecuteVisual(connection);
         }
 
         private void UpdateExecuteVisual(ConnectionInfo connection)

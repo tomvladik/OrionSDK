@@ -175,7 +175,7 @@ namespace SwqlStudio
             }
         }
 
-        public bool IsConnected
+        public virtual bool IsConnected
         {
             get
             {

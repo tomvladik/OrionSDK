@@ -63,6 +63,7 @@ namespace SwqlStudio.Tests
                 // Simulate disconnect then restore
                 connection.TriggerClosed();
                 System.Windows.Forms.Application.DoEvents(); // Process queued messages
+                connection.SimulatedConnected = true; // a real restore means the channel is back up
                 connection.TriggerRestored();
                 System.Windows.Forms.Application.DoEvents(); // Process queued messages
 
@@ -85,6 +86,7 @@ namespace SwqlStudio.Tests
                 tab.CurrentStatus.Should().Be("Disconnected");
 
                 tab.ConnectionInfo = c2;
+                c2.SimulatedConnected = true; // a real restore means the channel is back up
                 c2.TriggerRestored();
                 System.Windows.Forms.Application.DoEvents(); // Process queued messages
                 tab.CurrentStatus.Should().Be("Connected");
@@ -123,6 +125,39 @@ namespace SwqlStudio.Tests
 
                 tab.CurrentStatus.Should().Be("Disconnected");
             });
+        }
+
+        [Fact]
+        public void QueryTab_ShowsDisconnected_WhenRestoredHandlerRunsAfterClose()
+        {
+            RunInSta(() =>
+            {
+                var tab = new QueryTab();
+                var connection = new TestConnectionInfoWrapper("server", "user", "pass", "Orion (v3)");
+                connection.SimulatedConnected = true;
+                tab.ConnectionInfo = connection;
+                tab.CurrentStatus.Should().Be("Connected");
+
+                connection.Close();
+                connection.SimulatedConnected = false; // Close() drops the proxy
+
+                // The handler itself is invoked after Close(); the tab must still render the real state.
+                InvokeConnectionRestoredHandler(tab, connection);
+                System.Windows.Forms.Application.DoEvents();
+
+                tab.CurrentStatus.Should().Be("Disconnected");
+            });
+        }
+
+        /// <summary>Calls the handler directly to simulate a stale event delivered after Close().</summary>
+        private static void InvokeConnectionRestoredHandler(QueryTab tab, ConnectionInfo connection)
+        {
+            var handler = typeof(QueryTab).GetMethod(
+                "_connectionInfo_ConnectionRestored",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+
+            handler.Should().NotBeNull("the test targets the QueryTab connection-restored handler");
+            handler.Invoke(tab, new object[] { connection, EventArgs.Empty });
         }
 
         [Fact]
@@ -198,6 +233,11 @@ namespace SwqlStudio.Tests
 
             public void TriggerClosed() => OnConnectionLost();
             public void TriggerRestored() => OnConnectionRestored();
+
+            /// <summary>Stands in for a live channel, which a fake proxy cannot provide.</summary>
+            public bool SimulatedConnected { get; set; }
+
+            public override bool IsConnected => SimulatedConnected;
         }
 
         private class FakeInfoService : InfoServiceBase
