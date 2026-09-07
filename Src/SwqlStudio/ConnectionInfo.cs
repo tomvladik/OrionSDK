@@ -233,9 +233,14 @@ namespace SwqlStudio
 
                         while (!ct.IsCancellationRequested && !IsConnected)
                         {
-                            if (await TryReconnectAsync(ct))
+                            int? committedGeneration = await TryReconnectAsync(ct);
+
+                            if (committedGeneration.HasValue)
                             {
-                                OnConnectionRestored();
+                                // Close() may have run between the commit and here, so re-validate before announcing.
+                                if (IsGenerationCurrent(committedGeneration.Value))
+                                    OnConnectionRestored();
+
                                 break;
                             }
 
@@ -276,8 +281,23 @@ namespace SwqlStudio
             }
         }
 
+        private bool IsGenerationCurrent(int generation)
+        {
+            lock (_proxyLock)
+            {
+                return !_isClosed && _connectionGeneration == generation;
+            }
+        }
+
         protected internal virtual void OnConnectionRestored()
         {
+            lock (_proxyLock)
+            {
+                // Never report a closed connection as restored.
+                if (_isClosed)
+                    return;
+            }
+
             _connectionClosed = false;
 
             var handler = ConnectionRestored;
@@ -290,7 +310,8 @@ namespace SwqlStudio
             }
         }
 
-        private async Task<bool> TryReconnectAsync(CancellationToken ct)
+        /// <summary>Returns the generation it committed, or null when the attempt failed or lost the race.</summary>
+        private async Task<int?> TryReconnectAsync(CancellationToken ct)
         {
             InfoServiceProxy newProxy = null;
             InformationServiceConnection newConnection = null;
@@ -298,13 +319,13 @@ namespace SwqlStudio
             try
             {
                 if (ct.IsCancellationRequested)
-                    return false;
+                    return null;
 
                 int generationAtStart;
                 lock (_proxyLock)
                 {
                     if (_isClosed)
-                        return false;
+                        return null;
 
                     generationAtStart = _connectionGeneration;
                 }
@@ -322,7 +343,7 @@ namespace SwqlStudio
                 {
                     // Close() or another reconnect may have won while we were opening; discard our replacement.
                     if (_isClosed || ct.IsCancellationRequested || _connectionGeneration != generationAtStart)
-                        return false;
+                        return null;
 
                     var oldProxy = _proxy;
                     var oldConnection = Connection;
@@ -336,14 +357,14 @@ namespace SwqlStudio
 
                     DisposeQuietly(oldConnection);
                     DisposeQuietly(oldProxy);
-                }
 
-                return true;
+                    return _connectionGeneration;
+                }
             }
             catch (Exception ex)
             {
                 log.Error($"Reconnect attempt to {_server} failed", ex);
-                return false;
+                return null;
             }
             finally
             {

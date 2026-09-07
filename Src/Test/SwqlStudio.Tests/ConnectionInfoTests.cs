@@ -1,6 +1,7 @@
 using System;
 using System.ServiceModel;
 using System.ServiceModel.Channels;
+using System.Threading;
 using FluentAssertions;
 using SolarWinds.InformationService.Contract2;
 using SolarWinds.InformationService.InformationServiceClient;
@@ -62,12 +63,56 @@ namespace SwqlStudio.Tests
             clone.QueryParameters.Should().ContainKey("k");
         }
 
+        [Fact]
+        public void OnConnectionRestored_IsSuppressed_AfterClose()
+        {
+            // Built without a SynchronizationContext so the event fires synchronously and the assertion is deterministic.
+            var info = CreateWithoutSyncContext();
+            bool restoredRaised = false;
+            info.ConnectionRestored += (s, e) => restoredRaised = true;
+
+            info.Close();
+
+            // A reconnect that committed just before Close() must not report the connection as up again.
+            info.TriggerRestored();
+
+            restoredRaised.Should().BeFalse();
+        }
+
+        [Fact]
+        public void OnConnectionRestored_IsRaised_WhenNotClosed()
+        {
+            var info = CreateWithoutSyncContext();
+            bool restoredRaised = false;
+            info.ConnectionRestored += (s, e) => restoredRaised = true;
+
+            info.TriggerRestored();
+
+            restoredRaised.Should().BeTrue();
+        }
+
+        private static TestConnectionInfo CreateWithoutSyncContext()
+        {
+            var previous = SynchronizationContext.Current;
+            SynchronizationContext.SetSynchronizationContext(null);
+            try
+            {
+                return new TestConnectionInfo();
+            }
+            finally
+            {
+                SynchronizationContext.SetSynchronizationContext(previous);
+            }
+        }
+
         private class TestConnectionInfo : ConnectionInfo
         {
             public TestConnectionInfo(string server = "localhost", string user = "user", string pass = "pass", string type = "Orion (v3)")
                 : base(server, user, pass, type, new FakeInfoService())
             {
             }
+
+            public void TriggerRestored() => OnConnectionRestored();
 
             internal new ConnectionInfo Copy()
             {
