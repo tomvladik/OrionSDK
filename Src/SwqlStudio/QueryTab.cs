@@ -36,11 +36,30 @@ namespace SwqlStudio
         {
             set
             {
+                // Unsubscribe from previous connection if any
+                if (base.ConnectionInfo != null)
+                {
+                    base.ConnectionInfo.ConnectionClosed -= _connectionInfo_ConnectionClosed;
+                    base.ConnectionInfo.ConnectionClosing -= _connectionInfo_ConnectionClosing;
+                    base.ConnectionInfo.ConnectionRestored -= _connectionInfo_ConnectionRestored;
+                }
+
                 base.ConnectionInfo = value;
+
+                // Subscribe to new connection events
+                if (base.ConnectionInfo != null)
+                {
+                    base.ConnectionInfo.ConnectionClosed += _connectionInfo_ConnectionClosed;
+                    base.ConnectionInfo.ConnectionClosing += _connectionInfo_ConnectionClosing;
+                    base.ConnectionInfo.ConnectionRestored += _connectionInfo_ConnectionRestored;
+                }
+
                 SetMetadataProvider();
                 queryStatusBar1.Initialize(base.ConnectionInfo);
             }
         }
+
+        internal string CurrentStatus => queryStatusBar1?.ConnectionStatus;
 
         [Flags]
         private enum Tabs
@@ -879,6 +898,39 @@ namespace SwqlStudio
         public void HideFindReplaceDialog()
         {
             findReplaceDialog.Window.Hide();
+        }
+
+        private void _connectionInfo_ConnectionClosed(object sender, EventArgs e)
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke(new EventHandler(_connectionInfo_ConnectionClosed), sender, e);
+                return;
+            }
+
+            queryStatusBar1?.UpdateStatusLabel("Disconnected");
+        }
+
+        private void _connectionInfo_ConnectionClosing(object sender, EventArgs e)
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke(new EventHandler(_connectionInfo_ConnectionClosing), sender, e);
+                return;
+            }
+
+            queryStatusBar1?.UpdateStatusLabel("Disconnecting...");
+        }
+
+        private void _connectionInfo_ConnectionRestored(object sender, EventArgs e)
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke(new EventHandler(_connectionInfo_ConnectionRestored), sender, e);
+                return;
+            }
+
+            queryStatusBar1?.UpdateStatusLabel("Connected");
         }
     }
 }

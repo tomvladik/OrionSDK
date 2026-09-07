@@ -80,5 +80,7 @@ namespace SwqlStudio
         {
             _connectionLabel.Text = text;
         }
+
+        internal string ConnectionStatus => _connectionLabel.Text;
     }
 }

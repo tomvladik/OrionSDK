@@ -22,6 +22,9 @@ namespace SwqlStudio
         private readonly BindingList<ConnectionInfo> connectionsDataSource = new BindingList<ConnectionInfo>();
         private ConnectionsManager connectionsManager;
         private QueryTab lastActiveTab;
+        private string executeDefaultToolTip;
+        private System.Drawing.Color executeDefaultBackColor;
+        private System.Drawing.Color executeDefaultForeColor;
 
         public PropertyBag QueryParameters
         {
@@ -41,6 +44,10 @@ namespace SwqlStudio
         {
             DpiHelper.FixFont(this);
             InitializeComponent();
+
+            executeDefaultToolTip = executeToolButton.ToolTipText;
+            executeDefaultBackColor = executeToolButton.BackColor;
+            executeDefaultForeColor = menuQueryExecute.ForeColor;
 
             InitializeDockPanel();
             SetEntityGroupingMode((EntityGroupingMode)Enum.Parse(typeof(EntityGroupingMode),
@@ -80,6 +87,7 @@ namespace SwqlStudio
             if (activeConnectionTab != null)
             {
                 SelectedConnection = activeConnectionTab.ConnectionInfo;
+                UpdateExecuteVisual(activeConnectionTab.ConnectionInfo);
             }
 
 
@@ -107,18 +115,75 @@ namespace SwqlStudio
             filesDock.AddServer(provider, addedConnection);
             SelectedConnection = addedConnection;
 
+            HookConnectionVisuals(addedConnection);
+
             if (connectionsDataSource.Count == 1)
                 filesDock.ReplaceConnection(null, addedConnection);
         }
 
         private void ServerListOnConnectionRemoved(object sender, ConnectionsEventArgs e)
         {
+            UnhookConnectionVisuals(e.Connection);
             connectionsDataSource.Remove(e.Connection);
 
             if (connectionsDataSource.Any())
                 SelectedConnection = connectionsDataSource.First();
 
             filesDock.CloseServer(e.Connection, SelectedConnection);
+        }
+
+        private void HookConnectionVisuals(ConnectionInfo connection)
+        {
+            connection.ConnectionClosed += ConnectionOnConnectionClosed;
+            connection.ConnectionRestored += ConnectionOnConnectionRestored;
+        }
+
+        private void UnhookConnectionVisuals(ConnectionInfo connection)
+        {
+            connection.ConnectionClosed -= ConnectionOnConnectionClosed;
+            connection.ConnectionRestored -= ConnectionOnConnectionRestored;
+        }
+
+        private void ConnectionOnConnectionClosed(object sender, EventArgs e)
+        {
+            var connection = sender as ConnectionInfo;
+            if (connection == SelectedConnection)
+                SetExecuteDisconnectedVisual();
+        }
+
+        private void ConnectionOnConnectionRestored(object sender, EventArgs e)
+        {
+            var connection = sender as ConnectionInfo;
+            if (connection == SelectedConnection)
+                SetExecuteNormalVisual();
+        }
+
+        private void UpdateExecuteVisual(ConnectionInfo connection)
+        {
+            if (connection == null)
+            {
+                SetExecuteNormalVisual();
+                return;
+            }
+
+            if (connection.IsConnected)
+                SetExecuteNormalVisual();
+            else
+                SetExecuteDisconnectedVisual();
+        }
+
+        private void SetExecuteDisconnectedVisual()
+        {
+            executeToolButton.BackColor = System.Drawing.Color.Gold;
+            executeToolButton.ToolTipText = "Execute query (disconnected — retrying)";
+            menuQueryExecute.ForeColor = System.Drawing.Color.DarkGoldenrod;
+        }
+
+        private void SetExecuteNormalVisual()
+        {
+            executeToolButton.BackColor = executeDefaultBackColor;
+            executeToolButton.ToolTipText = executeDefaultToolTip;
+            menuQueryExecute.ForeColor = executeDefaultForeColor;
         }
 
         private void startTimer_Tick(object sender, EventArgs e)
