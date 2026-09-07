@@ -441,7 +441,7 @@ namespace SwqlStudio
                     }
 
                     queryStatusBar1.UpdateValues(arg.Results.Rows.Count, arg.QueryTime, (long?)arg.Results.ExtendedProperties["TotalRows"]);
-                    queryStatusBar1.UpdateStatusLabel("Ready");
+                    queryStatusBar1.ShowConnectionState();
 
                     RawXmlTabVisible = false;
                     ResultsTabVisible = true;
@@ -453,7 +453,7 @@ namespace SwqlStudio
                     ResultsTabVisible = false;
 
                     queryStatusBar1.UpdateValues(0, arg.QueryTime);
-                    queryStatusBar1.UpdateStatusLabel("Ready");
+                    queryStatusBar1.ShowConnectionState();
                 }
 
                 if (arg.Errors != null)
@@ -908,7 +908,7 @@ namespace SwqlStudio
                 return;
             }
 
-            queryStatusBar1?.UpdateStatusLabel("Disconnected");
+            queryStatusBar1?.UpdateStatusLabel(QueryStatusBar.Disconnected);
         }
 
         private void _connectionInfo_ConnectionClosing(object sender, EventArgs e)
@@ -919,7 +919,7 @@ namespace SwqlStudio
                 return;
             }
 
-            queryStatusBar1?.UpdateStatusLabel("Disconnecting...");
+            queryStatusBar1?.UpdateStatusLabel(QueryStatusBar.Disconnecting);
         }
 
         private void _connectionInfo_ConnectionRestored(object sender, EventArgs e)
@@ -930,7 +930,7 @@ namespace SwqlStudio
                 return;
             }
 
-            queryStatusBar1?.UpdateStatusLabel("Connected");
+            queryStatusBar1?.UpdateStatusLabel(QueryStatusBar.Connected);
         }
     }
 }

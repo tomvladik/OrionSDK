@@ -90,6 +90,56 @@ namespace SwqlStudio.Tests
             });
         }
 
+        [Fact]
+        public void QueryTab_ShowsDisconnected_WhenConnectionIsNotOpen()
+        {
+            RunInSta(() =>
+            {
+                var tab = new QueryTab();
+                var connection = new TestConnectionInfoWrapper("offline-server", "user", "pass", "Orion (v3)");
+
+                tab.ConnectionInfo = connection;
+
+                tab.CurrentStatus.Should().Be("Disconnected");
+            });
+        }
+
+        [Fact]
+        public void QueryTab_KeepsDisconnected_WhenConnectionIsReassigned()
+        {
+            RunInSta(() =>
+            {
+                var tab = new QueryTab();
+                var connection = new TestConnectionInfoWrapper("offline-server", "user", "pass", "Orion (v3)");
+                tab.ConnectionInfo = connection;
+
+                connection.TriggerClosed();
+                System.Windows.Forms.Application.DoEvents();
+                tab.CurrentStatus.Should().Be("Disconnected");
+
+                // Switching tabs reassigns the same connection; status must not revert to Connected
+                tab.ConnectionInfo = connection;
+
+                tab.CurrentStatus.Should().Be("Disconnected");
+            });
+        }
+
+        [Fact]
+        public void QueryStatusBar_IdleStateReflectsConnection_RatherThanReadyLiteral()
+        {
+            RunInSta(() =>
+            {
+                var statusBar = new QueryStatusBar();
+                var connection = new TestConnectionInfoWrapper("offline-server", "user", "pass", "Orion (v3)");
+                statusBar.Initialize(connection);
+
+                // What a finished query now shows instead of "Ready"
+                statusBar.ShowConnectionState();
+
+                statusBar.ConnectionStatus.Should().Be("Disconnected");
+            });
+        }
+
         private class TestConnectionInfoWrapper : ConnectionInfo
         {
             public TestConnectionInfoWrapper(string server, string username, string password, string serverType)
