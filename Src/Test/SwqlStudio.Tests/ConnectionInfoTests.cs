@@ -105,6 +105,30 @@ namespace SwqlStudio.Tests
             service.LastProxy.WasDisposed.Should().BeTrue();
         }
 
+        [Fact]
+        public void Connect_DiscardsTheStaleProxy_WhenReplacingItFails()
+        {
+            var service = new FakeInfoService { FirstProxyOpens = true };
+            var info = new TestConnectionInfo(infoService: service);
+
+            info.Connect();
+
+            // Closes the channel without clearing it, so the next Connect() takes the replacement path.
+            service.OpenedProxy.Abort();
+
+            Action act = () => info.Connect();
+
+            // Sets up the state under test: disposes the stale proxy, then fails to open its replacement.
+            act.Should().Throw<Exception>();
+
+            // The attempt under test. Both throw, so only the call count tells recovery from tripping
+            // over the disposed proxy: reaching CreateProxy a third time means _proxy was cleared.
+            act.Should().Throw<Exception>();
+            service.CreateProxyCount.Should().Be(3);
+
+            info.Close();
+        }
+
         private static TestConnectionInfo CreateWithoutSyncContext()
         {
             var previous = SynchronizationContext.Current;
@@ -152,12 +176,48 @@ namespace SwqlStudio.Tests
 
             public override string ServiceType => _serviceType;
 
+            /// <summary>Makes the first proxy openable, so a later Connect() has a live proxy to replace.</summary>
+            public bool FirstProxyOpens { get; set; }
+
             public UnopenableProxy LastProxy { get; private set; }
+
+            public InfoServiceProxy OpenedProxy { get; private set; }
+
+            public int CreateProxyCount { get; private set; }
 
             public override InfoServiceProxy CreateProxy(string server)
             {
+                CreateProxyCount++;
+
+                if (FirstProxyOpens && CreateProxyCount == 1)
+                {
+                    OpenedProxy = new LocalHttpProxy(_credentials);
+                    return OpenedProxy;
+                }
+
                 LastProxy = new UnopenableProxy(_credentials);
                 return LastProxy;
+            }
+        }
+
+        /// <summary>An HTTP channel opens without contacting the server, so nothing has to listen on the port.</summary>
+        private class LocalHttpProxy : InfoServiceProxy
+        {
+            public LocalHttpProxy(ServiceCredentials credentials)
+                : base(new Uri("http://127.0.0.1:1/unused"), CreateBinding(), credentials)
+            {
+            }
+
+            // Disposal probes the dead endpoint; skipping proxy discovery keeps that from taking seconds.
+            private static BasicHttpBinding CreateBinding()
+            {
+                return new BasicHttpBinding
+                {
+                    UseDefaultWebProxy = false,
+                    OpenTimeout = TimeSpan.FromMilliseconds(200),
+                    SendTimeout = TimeSpan.FromMilliseconds(200),
+                    CloseTimeout = TimeSpan.FromMilliseconds(200)
+                };
             }
         }
 

@@ -154,7 +154,10 @@ namespace SwqlStudio
             {
                 if (_proxy == null || _proxy.Channel.State == CommunicationState.Closed || _proxy.Channel.State == CommunicationState.Faulted)
                 {
-                    DisposeQuietly(_proxy);
+                    // Clear it first; if OpenProxy() throws, the next attempt must not inspect the disposed one.
+                    var stale = _proxy;
+                    _proxy = null;
+                    DisposeQuietly(stale);
 
                     _proxy = OpenProxy();
                     _isClosed = false;
