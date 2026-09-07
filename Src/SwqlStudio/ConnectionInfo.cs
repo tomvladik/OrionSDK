@@ -237,9 +237,8 @@ namespace SwqlStudio
 
                             if (committedGeneration.HasValue)
                             {
-                                // Close() may have run between the commit and here, so re-validate before announcing.
-                                if (IsGenerationCurrent(committedGeneration.Value))
-                                    OnConnectionRestored();
+                                // Validated inside the state transition, so Close() cannot slip in behind the check.
+                                RaiseConnectionRestored(committedGeneration.Value);
 
                                 break;
                             }
@@ -291,23 +290,42 @@ namespace SwqlStudio
 
         protected internal virtual void OnConnectionRestored()
         {
+            RaiseConnectionRestored(null);
+        }
+
+        /// <param name="expectedGeneration">Generation the caller committed, or null to accept whatever is current.</param>
+        private void RaiseConnectionRestored(int? expectedGeneration)
+        {
+            EventHandler<EventArgs> handler;
+            int generation;
+
+            // The guard, the state change and the handler capture must be one atomic step,
+            // otherwise Close() can slip in between them and we announce a closed connection as up.
             lock (_proxyLock)
             {
-                // Never report a closed connection as restored.
                 if (_isClosed)
                     return;
+
+                if (expectedGeneration.HasValue && _connectionGeneration != expectedGeneration.Value)
+                    return;
+
+                _connectionClosed = false;
+                generation = _connectionGeneration;
+                handler = ConnectionRestored;
             }
 
-            _connectionClosed = false;
+            if (handler == null)
+                return;
 
-            var handler = ConnectionRestored;
-            if (handler != null)
-            {
-                if (_syncContext != null)
-                    _syncContext.Post(_ => handler.Invoke(this, EventArgs.Empty), null);
-                else
-                    handler.Invoke(this, EventArgs.Empty);
-            }
+            // Dispatch outside the lock; revalidate because Close() may run before this executes.
+            if (_syncContext != null)
+                _syncContext.Post(_ =>
+                {
+                    if (IsGenerationCurrent(generation))
+                        handler.Invoke(this, EventArgs.Empty);
+                }, null);
+            else if (IsGenerationCurrent(generation))
+                handler.Invoke(this, EventArgs.Empty);
         }
 
         /// <summary>Returns the generation it committed, or null when the attempt failed or lost the race.</summary>

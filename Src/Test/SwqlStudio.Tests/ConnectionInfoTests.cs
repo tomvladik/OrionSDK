@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.ServiceModel;
 using System.ServiceModel.Channels;
 using System.Threading;
@@ -89,6 +90,74 @@ namespace SwqlStudio.Tests
             info.TriggerRestored();
 
             restoredRaised.Should().BeTrue();
+        }
+
+        [Fact]
+        public void OnConnectionRestored_IsSuppressed_WhenCloseRunsBeforePostedCallbackExecutes()
+        {
+            var context = new DeferredSynchronizationContext();
+            var info = CreateWith(context);
+            bool restoredRaised = false;
+            info.ConnectionRestored += (s, e) => restoredRaised = true;
+
+            info.TriggerRestored();
+            context.Pending.Should().Be(1, "the event is dispatched through the captured context");
+
+            // Close() lands after the callback was posted but before it runs.
+            info.Close();
+            context.DrainPending();
+
+            restoredRaised.Should().BeFalse();
+        }
+
+        [Fact]
+        public void OnConnectionRestored_IsRaised_WhenPostedCallbackRunsWhileStillOpen()
+        {
+            var context = new DeferredSynchronizationContext();
+            var info = CreateWith(context);
+            bool restoredRaised = false;
+            info.ConnectionRestored += (s, e) => restoredRaised = true;
+
+            info.TriggerRestored();
+            context.DrainPending();
+
+            restoredRaised.Should().BeTrue();
+        }
+
+        private static TestConnectionInfo CreateWith(SynchronizationContext context)
+        {
+            var previous = SynchronizationContext.Current;
+            SynchronizationContext.SetSynchronizationContext(context);
+            try
+            {
+                return new TestConnectionInfo();
+            }
+            finally
+            {
+                SynchronizationContext.SetSynchronizationContext(previous);
+            }
+        }
+
+        /// <summary>Holds posted callbacks so a test can interleave other work before they run.</summary>
+        private class DeferredSynchronizationContext : SynchronizationContext
+        {
+            private readonly List<Action> _posted = new List<Action>();
+
+            public int Pending => _posted.Count;
+
+            public override void Post(SendOrPostCallback d, object state)
+            {
+                _posted.Add(() => d(state));
+            }
+
+            public void DrainPending()
+            {
+                var callbacks = _posted.ToArray();
+                _posted.Clear();
+
+                foreach (var callback in callbacks)
+                    callback();
+            }
         }
 
         private static TestConnectionInfo CreateWithoutSyncContext()
