@@ -1,5 +1,6 @@
 ﻿using System;
 using System.ComponentModel;
+using System.Drawing;
 using System.Linq;
 using System.ServiceModel;
 using System.Windows.Forms;
@@ -22,9 +23,9 @@ namespace SwqlStudio
         private readonly BindingList<ConnectionInfo> connectionsDataSource = new BindingList<ConnectionInfo>();
         private ConnectionsManager connectionsManager;
         private QueryTab lastActiveTab;
-        private string executeDefaultToolTip;
-        private System.Drawing.Color executeDefaultBackColor;
-        private System.Drawing.Color executeDefaultForeColor;
+        private readonly string executeDefaultToolTip;
+        private readonly Color executeDefaultBackColor;
+        private readonly Color executeDefaultForeColor;
 
         public PropertyBag QueryParameters
         {
@@ -134,27 +135,17 @@ namespace SwqlStudio
 
         private void HookConnectionVisuals(ConnectionInfo connection)
         {
-            connection.ConnectionClosed += ConnectionOnConnectionClosed;
-            connection.ConnectionRestored += ConnectionOnConnectionRestored;
+            connection.ConnectionClosed += ConnectionStateChanged;
+            connection.ConnectionRestored += ConnectionStateChanged;
         }
 
         private void UnhookConnectionVisuals(ConnectionInfo connection)
         {
-            connection.ConnectionClosed -= ConnectionOnConnectionClosed;
-            connection.ConnectionRestored -= ConnectionOnConnectionRestored;
+            connection.ConnectionClosed -= ConnectionStateChanged;
+            connection.ConnectionRestored -= ConnectionStateChanged;
         }
 
-        private void ConnectionOnConnectionClosed(object sender, EventArgs e)
-        {
-            RefreshExecuteVisualFor(sender);
-        }
-
-        private void ConnectionOnConnectionRestored(object sender, EventArgs e)
-        {
-            RefreshExecuteVisualFor(sender);
-        }
-
-        private void RefreshExecuteVisualFor(object sender)
+        private void ConnectionStateChanged(object sender, EventArgs e)
         {
             var connection = sender as ConnectionInfo;
             if (connection != SelectedConnection)
@@ -166,30 +157,11 @@ namespace SwqlStudio
 
         private void UpdateExecuteVisual(ConnectionInfo connection)
         {
-            if (connection == null)
-            {
-                SetExecuteNormalVisual();
-                return;
-            }
+            bool disconnected = connection != null && !connection.IsConnected;
 
-            if (connection.IsConnected)
-                SetExecuteNormalVisual();
-            else
-                SetExecuteDisconnectedVisual();
-        }
-
-        private void SetExecuteDisconnectedVisual()
-        {
-            executeToolButton.BackColor = System.Drawing.Color.Gold;
-            executeToolButton.ToolTipText = "Execute query (disconnected — retrying)";
-            menuQueryExecute.ForeColor = System.Drawing.Color.DarkGoldenrod;
-        }
-
-        private void SetExecuteNormalVisual()
-        {
-            executeToolButton.BackColor = executeDefaultBackColor;
-            executeToolButton.ToolTipText = executeDefaultToolTip;
-            menuQueryExecute.ForeColor = executeDefaultForeColor;
+            executeToolButton.BackColor = disconnected ? Color.Gold : executeDefaultBackColor;
+            executeToolButton.ToolTipText = disconnected ? "Execute query (disconnected — retrying)" : executeDefaultToolTip;
+            menuQueryExecute.ForeColor = disconnected ? Color.DarkGoldenrod : executeDefaultForeColor;
         }
 
         private void startTimer_Tick(object sender, EventArgs e)

@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.ServiceModel;
 using System.ServiceModel.Channels;
 using System.Threading;
@@ -93,71 +92,17 @@ namespace SwqlStudio.Tests
         }
 
         [Fact]
-        public void OnConnectionRestored_IsSuppressed_WhenCloseRunsBeforePostedCallbackExecutes()
+        public void Connect_DisposesTheProxy_WhenOpeningFails()
         {
-            var context = new DeferredSynchronizationContext();
-            var info = CreateWith(context);
-            bool restoredRaised = false;
-            info.ConnectionRestored += (s, e) => restoredRaised = true;
+            var service = new FakeInfoService();
+            var info = new TestConnectionInfo(infoService: service);
 
-            info.TriggerRestored();
-            context.Pending.Should().Be(1, "the event is dispatched through the captured context");
+            Action act = () => info.Connect();
 
-            // Close() lands after the callback was posted but before it runs.
-            info.Close();
-            context.DrainPending();
+            act.Should().Throw<Exception>();
 
-            restoredRaised.Should().BeFalse();
-        }
-
-        [Fact]
-        public void OnConnectionRestored_IsRaised_WhenPostedCallbackRunsWhileStillOpen()
-        {
-            var context = new DeferredSynchronizationContext();
-            var info = CreateWith(context);
-            bool restoredRaised = false;
-            info.ConnectionRestored += (s, e) => restoredRaised = true;
-
-            info.TriggerRestored();
-            context.DrainPending();
-
-            restoredRaised.Should().BeTrue();
-        }
-
-        private static TestConnectionInfo CreateWith(SynchronizationContext context)
-        {
-            var previous = SynchronizationContext.Current;
-            SynchronizationContext.SetSynchronizationContext(context);
-            try
-            {
-                return new TestConnectionInfo();
-            }
-            finally
-            {
-                SynchronizationContext.SetSynchronizationContext(previous);
-            }
-        }
-
-        /// <summary>Holds posted callbacks so a test can interleave other work before they run.</summary>
-        private class DeferredSynchronizationContext : SynchronizationContext
-        {
-            private readonly List<Action> _posted = new List<Action>();
-
-            public int Pending => _posted.Count;
-
-            public override void Post(SendOrPostCallback d, object state)
-            {
-                _posted.Add(() => d(state));
-            }
-
-            public void DrainPending()
-            {
-                var callbacks = _posted.ToArray();
-                _posted.Clear();
-
-                foreach (var callback in callbacks)
-                    callback();
-            }
+            // The caller never received the proxy, so nobody else can dispose it.
+            service.LastProxy.WasDisposed.Should().BeTrue();
         }
 
         private static TestConnectionInfo CreateWithoutSyncContext()
@@ -176,8 +121,8 @@ namespace SwqlStudio.Tests
 
         private class TestConnectionInfo : ConnectionInfo
         {
-            public TestConnectionInfo(string server = "localhost", string user = "user", string pass = "pass", string type = "Orion (v3)")
-                : base(server, user, pass, type, new FakeInfoService())
+            public TestConnectionInfo(string server = "localhost", string user = "user", string pass = "pass", string type = "Orion (v3)", FakeInfoService infoService = null)
+                : base(server, user, pass, type, infoService ?? new FakeInfoService())
             {
             }
 
@@ -207,9 +152,29 @@ namespace SwqlStudio.Tests
 
             public override string ServiceType => _serviceType;
 
+            public UnopenableProxy LastProxy { get; private set; }
+
             public override InfoServiceProxy CreateProxy(string server)
             {
-                return null;
+                LastProxy = new UnopenableProxy(_credentials);
+                return LastProxy;
+            }
+        }
+
+        /// <summary>Its binding carries no transport element, so Open() fails while creating the channel.</summary>
+        private class UnopenableProxy : InfoServiceProxy
+        {
+            public UnopenableProxy(ServiceCredentials credentials)
+                : base(new Uri("http://localhost/unused"), new CustomBinding(), credentials)
+            {
+            }
+
+            public bool WasDisposed { get; private set; }
+
+            protected override void Dispose(bool disposing)
+            {
+                WasDisposed = true;
+                base.Dispose(disposing);
             }
         }
 

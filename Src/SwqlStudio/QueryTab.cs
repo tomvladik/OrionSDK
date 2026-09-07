@@ -911,21 +911,21 @@ namespace SwqlStudio
 
         private void _connectionInfo_ConnectionClosed(object sender, EventArgs e)
         {
-            UpdateConnectionStatus(_connectionInfo_ConnectionClosed, null, sender, e);
+            ShowConnectionStatus(null);
         }
 
         private void _connectionInfo_ConnectionClosing(object sender, EventArgs e)
         {
-            UpdateConnectionStatus(_connectionInfo_ConnectionClosing, QueryStatusBar.Disconnecting, sender, e);
+            ShowConnectionStatus(QueryStatusBar.Disconnecting);
         }
 
         private void _connectionInfo_ConnectionRestored(object sender, EventArgs e)
         {
-            UpdateConnectionStatus(_connectionInfo_ConnectionRestored, null, sender, e);
+            ShowConnectionStatus(null);
         }
 
         /// <param name="status">Literal to show, or null to re-read the live connection state.</param>
-        private void UpdateConnectionStatus(EventHandler handler, string status, object sender, EventArgs e)
+        private void ShowConnectionStatus(string status)
         {
             // The connection raises events from a background thread, so the tab may be torn down mid-flight.
             if (IsDisposed || Disposing)
@@ -935,7 +935,7 @@ namespace SwqlStudio
             {
                 try
                 {
-                    BeginInvoke(handler, sender, e);
+                    BeginInvoke(new Action<string>(ShowConnectionStatus), status);
                 }
                 catch (ObjectDisposedException)
                 {
