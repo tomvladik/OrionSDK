@@ -5,11 +5,14 @@ using System.IO;
 using System.ServiceModel;
 using System.ServiceModel.Channels;
 using System.ServiceModel.Security;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Xml;
 using System.Xml.Serialization;
 using SolarWinds.InformationService.Contract2;
 using SolarWinds.InformationService.Contract2.PubSub;
 using SolarWinds.InformationService.InformationServiceClient;
+using SolarWinds.Logging;
 using SwqlStudio.Properties;
 using SwqlStudio.Subscriptions;
 
@@ -17,6 +20,11 @@ namespace SwqlStudio
 {
     public class ConnectionInfo : IDisposable
     {
+        private static readonly Log log = new Log();
+
+        private const int KeepAliveCheckIntervalSeconds = 10;
+        private const int ReconnectRetryIntervalSeconds = 10;
+
         public string ServerType { get; set; }
         private string _server;
         private string _username;
@@ -24,19 +32,30 @@ namespace SwqlStudio
 
         private InfoServiceProxy _proxy;
         private readonly InfoServiceBase _infoServiceType;
+        private CancellationTokenSource _keepAliveCts;
+        private bool _connectionClosed;
+        private readonly SynchronizationContext _syncContext;
+        private readonly object _proxyLock = new object();
 
         public event EventHandler<EventArgs> ConnectionClosed;
         public event EventHandler<EventArgs> ConnectionClosing;
+        public event EventHandler<EventArgs> ConnectionRestored;
 
         public ConnectionInfo(string server, string username, string password, string serverType)
+            : this(server, username, password, serverType, InfoServiceFactory.Create(serverType, username, password))
+        {
+        }
+
+        internal ConnectionInfo(string server, string username, string password, string serverType, InfoServiceBase infoServiceType)
         {
             ServerType = serverType;
             _server = server;
             _username = username;
             _password = password;
 
-            _infoServiceType = InfoServiceFactory.Create(serverType, username, password);
+            _infoServiceType = infoServiceType;
             QueryParameters = new PropertyBag();
+            _syncContext = SynchronizationContext.Current;
         }
 
         public Binding Binding
@@ -127,24 +146,36 @@ namespace SwqlStudio
 
         public void Connect()
         {
-            if (_proxy == null || (_proxy != null && (_proxy.Channel.State == CommunicationState.Closed || _proxy.Channel.State == CommunicationState.Faulted)))
+            lock (_proxyLock)
             {
-                if (_proxy != null)
-                    _proxy.Dispose();
+                if (_proxy == null || (_proxy != null && (_proxy.Channel.State == CommunicationState.Closed || _proxy.Channel.State == CommunicationState.Faulted)))
+                {
+                    if (_proxy != null)
+                        _proxy.Dispose();
 
-                _proxy = _infoServiceType.CreateProxy(_server);
-                _proxy.OperationTimeout = TimeSpan.FromMinutes(Settings.Default.OperationTimeout);
-                _proxy.ChannelFactory.Endpoint.Behaviors.Add(new LogHeaderReaderBehavior());
-                _proxy.Open();
+                    _proxy = _infoServiceType.CreateProxy(_server);
+                    _proxy.OperationTimeout = TimeSpan.FromMinutes(Settings.Default.OperationTimeout);
+                    _proxy.ChannelFactory.Endpoint.Behaviors.Add(new LogHeaderReaderBehavior());
+                    _proxy.Open();
+                    _connectionClosed = false;
+                    StartKeepAlive();
+                }
+
+                Connection?.Dispose();
+                Connection = new InformationServiceConnection((IInformationService)_proxy);
+                Connection.Open();
             }
-
-            Connection = new InformationServiceConnection((IInformationService)_proxy);
-            Connection.Open();
         }
 
         public bool IsConnected
         {
-            get { return _proxy != null && _proxy.ClientChannel.State == CommunicationState.Opened; }
+            get
+            {
+                lock (_proxyLock)
+                {
+                    return _proxy != null && _proxy.ClientChannel.State == CommunicationState.Opened;
+                }
+            }
         }
 
         internal NotificationDeliveryServiceProxy CreateActiveListenerProxy(INotificationSubscriber listener)
@@ -153,6 +184,120 @@ namespace SwqlStudio
                 throw new InvalidOperationException("This connection type doesn't support active subscriptions");
 
             return _infoServiceType.CreateNotificationDeliveryServiceProxy(_server, listener);
+        }
+
+        private void StartKeepAlive()
+        {
+            StopKeepAlive();
+            _keepAliveCts = new CancellationTokenSource();
+            Task.Run(() => KeepAliveMonitor(_keepAliveCts.Token));
+        }
+
+        private void StopKeepAlive()
+        {
+            if (_keepAliveCts != null)
+            {
+                _keepAliveCts.Cancel();
+                _keepAliveCts.Dispose();
+                _keepAliveCts = null;
+            }
+        }
+
+        private async Task KeepAliveMonitor(CancellationToken ct)
+        {
+            try
+            {
+                while (!ct.IsCancellationRequested)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(KeepAliveCheckIntervalSeconds), ct);
+
+                    if (ct.IsCancellationRequested)
+                        break;
+
+                    if (!IsConnected)
+                    {
+                        OnConnectionLost();
+
+                        while (!ct.IsCancellationRequested && !IsConnected)
+                        {
+                            if (await TryReconnectAsync(ct))
+                            {
+                                OnConnectionRestored();
+                                break;
+                            }
+
+                            await Task.Delay(TimeSpan.FromSeconds(ReconnectRetryIntervalSeconds), ct);
+                        }
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected when closing
+            }
+        }
+
+        protected internal virtual void OnConnectionLost()
+        {
+            if (_connectionClosed)
+                return;
+
+            _connectionClosed = true;
+
+            var handler = ConnectionClosed;
+            if (handler != null)
+            {
+                if (_syncContext != null)
+                    _syncContext.Post(_ => handler.Invoke(this, EventArgs.Empty), null);
+                else
+                    handler.Invoke(this, EventArgs.Empty);
+            }
+        }
+
+        protected internal virtual void OnConnectionRestored()
+        {
+            _connectionClosed = false;
+
+            var handler = ConnectionRestored;
+            if (handler != null)
+            {
+                if (_syncContext != null)
+                    _syncContext.Post(_ => handler.Invoke(this, EventArgs.Empty), null);
+                else
+                    handler.Invoke(this, EventArgs.Empty);
+            }
+        }
+
+        private async Task<bool> TryReconnectAsync(CancellationToken ct)
+        {
+            try
+            {
+                if (ct.IsCancellationRequested)
+                    return false;
+
+                var newProxy = _infoServiceType.CreateProxy(_server);
+                newProxy.OperationTimeout = TimeSpan.FromMinutes(Settings.Default.OperationTimeout);
+                newProxy.ChannelFactory.Endpoint.Behaviors.Add(new LogHeaderReaderBehavior());
+                newProxy.Open();
+
+                lock (_proxyLock)
+                {
+                    _proxy?.Dispose();
+                    _proxy = newProxy;
+
+                    Connection?.Dispose();
+                    Connection = new InformationServiceConnection((IInformationService)_proxy);
+                    Connection.Open();
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                // Log the exception for diagnostics
+                log.Error($"Reconnect attempt to {_server} failed", ex);
+                return false;
+            }
         }
 
         private void EnsureConnection()
@@ -352,16 +497,22 @@ namespace SwqlStudio
 
         public void Close()
         {
-            if (_proxy != null)
+            lock (_proxyLock)
             {
-                var listeners = ConnectionClosing;
-                listeners?.Invoke(this, EventArgs.Empty);
+                if (_proxy != null)
+                {
+                    StopKeepAlive();
 
-                _proxy.Dispose();
-                _proxy = null;
+                    var listeners = ConnectionClosing;
+                    listeners?.Invoke(this, EventArgs.Empty);
 
-                listeners = ConnectionClosed;
-                listeners?.Invoke(this, EventArgs.Empty);
+                    _proxy.Dispose();
+                    _proxy = null;
+
+                    _connectionClosed = true;
+                    listeners = ConnectionClosed;
+                    listeners?.Invoke(this, EventArgs.Empty);
+                }
             }
         }
 
