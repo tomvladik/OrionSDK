@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.ServiceModel;
 using System.ServiceModel.Channels;
@@ -138,6 +139,54 @@ namespace SwqlStudio.Tests
 
                 statusBar.ConnectionStatus.Should().Be("Disconnected");
             });
+        }
+
+        [Fact]
+        public void QueryTab_IgnoresConnectionEvents_AfterDisposal()
+        {
+            RunInSta(() =>
+            {
+                var connection = new TestConnectionInfoWrapper("server", "user", "pass", "Orion (v3)");
+                var tab = new QueryTab();
+                tab.ConnectionInfo = connection;
+
+                tab.Dispose();
+
+                Action raiseAfterDisposal = () =>
+                {
+                    connection.TriggerClosed();
+                    connection.TriggerRestored();
+                    System.Windows.Forms.Application.DoEvents();
+                };
+
+                raiseAfterDisposal.Should().NotThrow();
+            });
+        }
+
+        [Fact]
+        public void QueryTab_IsNotRetainedByConnection_AfterDisposal()
+        {
+            RunInSta(() =>
+            {
+                var connection = new TestConnectionInfoWrapper("server", "user", "pass", "Orion (v3)");
+
+                WeakReference tabReference = CreateAndDisposeTab(connection);
+
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                GC.Collect();
+
+                // A still-attached event handler would keep the disposed tab alive.
+                tabReference.IsAlive.Should().BeFalse();
+            });
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static WeakReference CreateAndDisposeTab(ConnectionInfo connection)
+        {
+            var tab = new QueryTab { ConnectionInfo = connection };
+            tab.Dispose();
+            return new WeakReference(tab);
         }
 
         private class TestConnectionInfoWrapper : ConnectionInfo

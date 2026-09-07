@@ -36,27 +36,35 @@ namespace SwqlStudio
         {
             set
             {
-                // Unsubscribe from previous connection if any
-                if (base.ConnectionInfo != null)
-                {
-                    base.ConnectionInfo.ConnectionClosed -= _connectionInfo_ConnectionClosed;
-                    base.ConnectionInfo.ConnectionClosing -= _connectionInfo_ConnectionClosing;
-                    base.ConnectionInfo.ConnectionRestored -= _connectionInfo_ConnectionRestored;
-                }
+                DetachConnectionEvents(base.ConnectionInfo);
 
                 base.ConnectionInfo = value;
 
-                // Subscribe to new connection events
-                if (base.ConnectionInfo != null)
-                {
-                    base.ConnectionInfo.ConnectionClosed += _connectionInfo_ConnectionClosed;
-                    base.ConnectionInfo.ConnectionClosing += _connectionInfo_ConnectionClosing;
-                    base.ConnectionInfo.ConnectionRestored += _connectionInfo_ConnectionRestored;
-                }
+                AttachConnectionEvents(base.ConnectionInfo);
 
                 SetMetadataProvider();
                 queryStatusBar1.Initialize(base.ConnectionInfo);
             }
+        }
+
+        private void AttachConnectionEvents(ConnectionInfo connection)
+        {
+            if (connection == null)
+                return;
+
+            connection.ConnectionClosed += _connectionInfo_ConnectionClosed;
+            connection.ConnectionClosing += _connectionInfo_ConnectionClosing;
+            connection.ConnectionRestored += _connectionInfo_ConnectionRestored;
+        }
+
+        private void DetachConnectionEvents(ConnectionInfo connection)
+        {
+            if (connection == null)
+                return;
+
+            connection.ConnectionClosed -= _connectionInfo_ConnectionClosed;
+            connection.ConnectionClosing -= _connectionInfo_ConnectionClosing;
+            connection.ConnectionRestored -= _connectionInfo_ConnectionRestored;
         }
 
         internal string CurrentStatus => queryStatusBar1?.ConnectionStatus;
@@ -119,6 +127,7 @@ namespace SwqlStudio
                 nullFont.Dispose();
                 nullFont = null;
             }
+            DetachConnectionEvents(ConnectionInfo);
             Unsubscribe();
         }
 
@@ -902,35 +911,40 @@ namespace SwqlStudio
 
         private void _connectionInfo_ConnectionClosed(object sender, EventArgs e)
         {
-            if (InvokeRequired)
-            {
-                BeginInvoke(new EventHandler(_connectionInfo_ConnectionClosed), sender, e);
-                return;
-            }
-
-            queryStatusBar1?.UpdateStatusLabel(QueryStatusBar.Disconnected);
+            UpdateConnectionStatus(_connectionInfo_ConnectionClosed, QueryStatusBar.Disconnected, sender, e);
         }
 
         private void _connectionInfo_ConnectionClosing(object sender, EventArgs e)
         {
-            if (InvokeRequired)
-            {
-                BeginInvoke(new EventHandler(_connectionInfo_ConnectionClosing), sender, e);
-                return;
-            }
-
-            queryStatusBar1?.UpdateStatusLabel(QueryStatusBar.Disconnecting);
+            UpdateConnectionStatus(_connectionInfo_ConnectionClosing, QueryStatusBar.Disconnecting, sender, e);
         }
 
         private void _connectionInfo_ConnectionRestored(object sender, EventArgs e)
         {
+            UpdateConnectionStatus(_connectionInfo_ConnectionRestored, QueryStatusBar.Connected, sender, e);
+        }
+
+        private void UpdateConnectionStatus(EventHandler handler, string status, object sender, EventArgs e)
+        {
+            // The connection raises events from a background thread, so the tab may be torn down mid-flight.
+            if (IsDisposed || Disposing)
+                return;
+
             if (InvokeRequired)
             {
-                BeginInvoke(new EventHandler(_connectionInfo_ConnectionRestored), sender, e);
+                try
+                {
+                    BeginInvoke(handler, sender, e);
+                }
+                catch (ObjectDisposedException)
+                {
+                    // Tab was disposed between the check above and the marshalling call.
+                }
+
                 return;
             }
 
-            queryStatusBar1?.UpdateStatusLabel(QueryStatusBar.Connected);
+            queryStatusBar1?.UpdateStatusLabel(status);
         }
     }
 }

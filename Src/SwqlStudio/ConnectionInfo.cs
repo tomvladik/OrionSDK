@@ -33,7 +33,13 @@ namespace SwqlStudio
         private InfoServiceProxy _proxy;
         private readonly InfoServiceBase _infoServiceType;
         private CancellationTokenSource _keepAliveCts;
+        private Task _keepAliveTask;
         private bool _connectionClosed;
+        private bool _isClosed;
+
+        // Bumped whenever the proxy is replaced or closed, so a slow reconnect can detect it lost the race.
+        private int _connectionGeneration;
+
         private readonly SynchronizationContext _syncContext;
         private readonly object _proxyLock = new object();
 
@@ -158,6 +164,8 @@ namespace SwqlStudio
                     _proxy.ChannelFactory.Endpoint.Behaviors.Add(new LogHeaderReaderBehavior());
                     _proxy.Open();
                     _connectionClosed = false;
+                    _isClosed = false;
+                    _connectionGeneration++;
                     StartKeepAlive();
                 }
 
@@ -189,8 +197,13 @@ namespace SwqlStudio
         private void StartKeepAlive()
         {
             StopKeepAlive();
-            _keepAliveCts = new CancellationTokenSource();
-            Task.Run(() => KeepAliveMonitor(_keepAliveCts.Token));
+
+            var cts = new CancellationTokenSource();
+            _keepAliveCts = cts;
+
+            // Capture the token before scheduling; a concurrent Close() can null the field before the task starts.
+            CancellationToken token = cts.Token;
+            _keepAliveTask = Task.Run(() => KeepAliveMonitor(token));
         }
 
         private void StopKeepAlive()
@@ -235,6 +248,15 @@ namespace SwqlStudio
             {
                 // Expected when closing
             }
+            catch (ObjectDisposedException)
+            {
+                // The token source was disposed by Close() while we were waiting on it.
+            }
+            catch (Exception ex)
+            {
+                // This runs detached, so an escaping exception would otherwise go unobserved.
+                log.Error($"Keep-alive monitor for {_server} stopped unexpectedly", ex);
+            }
         }
 
         protected internal virtual void OnConnectionLost()
@@ -270,33 +292,79 @@ namespace SwqlStudio
 
         private async Task<bool> TryReconnectAsync(CancellationToken ct)
         {
+            InfoServiceProxy newProxy = null;
+            InformationServiceConnection newConnection = null;
+
             try
             {
                 if (ct.IsCancellationRequested)
                     return false;
 
-                var newProxy = _infoServiceType.CreateProxy(_server);
+                int generationAtStart;
+                lock (_proxyLock)
+                {
+                    if (_isClosed)
+                        return false;
+
+                    generationAtStart = _connectionGeneration;
+                }
+
+                // Build the whole replacement off to the side so a partial failure cannot corrupt live state.
+                newProxy = _infoServiceType.CreateProxy(_server);
                 newProxy.OperationTimeout = TimeSpan.FromMinutes(Settings.Default.OperationTimeout);
                 newProxy.ChannelFactory.Endpoint.Behaviors.Add(new LogHeaderReaderBehavior());
                 newProxy.Open();
 
+                newConnection = new InformationServiceConnection((IInformationService)newProxy);
+                newConnection.Open();
+
                 lock (_proxyLock)
                 {
-                    _proxy?.Dispose();
-                    _proxy = newProxy;
+                    // Close() or another reconnect may have won while we were opening; discard our replacement.
+                    if (_isClosed || ct.IsCancellationRequested || _connectionGeneration != generationAtStart)
+                        return false;
 
-                    Connection?.Dispose();
-                    Connection = new InformationServiceConnection((IInformationService)_proxy);
-                    Connection.Open();
+                    var oldProxy = _proxy;
+                    var oldConnection = Connection;
+
+                    _proxy = newProxy;
+                    Connection = newConnection;
+                    _connectionGeneration++;
+
+                    newProxy = null;
+                    newConnection = null;
+
+                    DisposeQuietly(oldConnection);
+                    DisposeQuietly(oldProxy);
                 }
 
                 return true;
             }
             catch (Exception ex)
             {
-                // Log the exception for diagnostics
                 log.Error($"Reconnect attempt to {_server} failed", ex);
                 return false;
+            }
+            finally
+            {
+                // Non-null only when the attempt failed or lost the race.
+                DisposeQuietly(newConnection);
+                DisposeQuietly(newProxy);
+            }
+        }
+
+        private static void DisposeQuietly(IDisposable disposable)
+        {
+            if (disposable == null)
+                return;
+
+            try
+            {
+                disposable.Dispose();
+            }
+            catch (Exception ex)
+            {
+                log.Warn("Failed to dispose a replaced connection resource.", ex);
             }
         }
 
@@ -499,6 +567,10 @@ namespace SwqlStudio
         {
             lock (_proxyLock)
             {
+                // Set before anything else so a reconnect already in flight refuses to commit.
+                _isClosed = true;
+                _connectionGeneration++;
+
                 if (_proxy != null)
                 {
                     StopKeepAlive();
@@ -506,12 +578,19 @@ namespace SwqlStudio
                     var listeners = ConnectionClosing;
                     listeners?.Invoke(this, EventArgs.Empty);
 
+                    DisposeQuietly(Connection);
+                    Connection = null;
+
                     _proxy.Dispose();
                     _proxy = null;
 
                     _connectionClosed = true;
                     listeners = ConnectionClosed;
                     listeners?.Invoke(this, EventArgs.Empty);
+                }
+                else
+                {
+                    StopKeepAlive();
                 }
             }
         }
