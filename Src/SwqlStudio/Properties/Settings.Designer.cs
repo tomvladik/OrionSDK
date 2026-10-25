@@ -388,5 +388,14 @@ namespace SwqlStudio.Properties {
                 return ((global::System.TimeSpan)(this["MaxReconnectDelay"]));
             }
         }
+        
+        [global::System.Configuration.ApplicationScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("00:03:00")]
+        public global::System.TimeSpan FastReconnectWindow {
+            get {
+                return ((global::System.TimeSpan)(this["FastReconnectWindow"]));
+            }
+        }
     }
 }

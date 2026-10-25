@@ -280,8 +280,8 @@ namespace SwqlStudio
                         break;
 
                     // Channel state alone misses a SWIS that died after we opened during its restart.
-                    if (IsConnected)
-                        ProbeServer();
+                    if (IsConnected && !ProbeServer())
+                        return;
 
                     if (!IsConnected)
                     {
@@ -333,12 +333,14 @@ namespace SwqlStudio
             }
         }
 
-        // Short restarts recover at full speed; only a longer outage starts backing off.
-        private static readonly TimeSpan FlatRetryWindow = TimeSpan.FromMinutes(1);
+        // SWIS can take minutes to come back after a restart, so keep retrying fast until then; zero disables it.
+        private static readonly TimeSpan FastReconnectWindow = Settings.Default.FastReconnectWindow >= TimeSpan.Zero
+            ? Settings.Default.FastReconnectWindow
+            : TimeSpan.FromMinutes(3);
 
         internal static TimeSpan NextReconnectDelay(TimeSpan current, TimeSpan outageDuration)
         {
-            if (outageDuration < FlatRetryWindow)
+            if (outageDuration < FastReconnectWindow)
                 return current;
 
             var grown = TimeSpan.FromTicks((long)(current.Ticks * 1.5));
@@ -353,12 +355,22 @@ namespace SwqlStudio
 
         internal static bool IsAuthenticationFailure(Exception ex)
         {
+            // An expired session after a SWIS restart is not a credential rejection; a fresh session recovers.
+            if (ex is MessageSecurityException && IsBadContextToken(ex.InnerException))
+                return false;
+
             return ex is SecurityAccessDeniedException
                 || ex is SecurityNegotiationException
                 || ex is MessageSecurityException;
         }
 
-        internal void ProbeServer()
+        private static bool IsBadContextToken(Exception ex)
+        {
+            return ex is FaultException fault && fault.Code?.SubCode?.Name == "BadContextToken";
+        }
+
+        /// <summary>Returns false when SWIS rejected the credentials, so automatic reconnect must stop.</summary>
+        internal bool ProbeServer()
         {
             InfoServiceProxy proxy;
             lock (_proxyLock)
@@ -367,7 +379,7 @@ namespace SwqlStudio
             }
 
             if (proxy == null)
-                return;
+                return true;
 
             try
             {
@@ -378,6 +390,13 @@ namespace SwqlStudio
             catch (FaultException)
             {
                 // SWIS answered, so it is alive.
+            }
+            catch (Exception ex) when (IsAuthenticationFailure(ex))
+            {
+                // HTTPS checks credentials per request, so reconnecting and probing again would add a failed login every interval.
+                log.Error($"{_server} rejected the credentials; automatic reconnect stopped: {ex.GetType().Name}: {ex.Message}");
+                DiscardProxy(proxy);
+                return false;
             }
             catch (Exception ex) when (ex is CommunicationException || ex is TimeoutException)
             {
@@ -393,6 +412,8 @@ namespace SwqlStudio
                 // An unexpected probe failure must not stop the keep-alive monitor.
                 log.Error($"Probing {_server} failed unexpectedly", ex);
             }
+
+            return true;
         }
 
         protected internal virtual void OnConnectionLost()
@@ -626,8 +647,7 @@ namespace SwqlStudio
         // A restarted SWIS forgets the session while our channel still reports Opened, so only a new channel recovers.
         internal static bool IsStaleSecuritySession(Exception ex)
         {
-            return ex?.InnerException is FaultException fault
-                && fault.Code?.SubCode?.Name == "BadContextToken";
+            return IsBadContextToken(ex?.InnerException);
         }
 
         private void DiscardProxy(InfoServiceProxy expected = null)

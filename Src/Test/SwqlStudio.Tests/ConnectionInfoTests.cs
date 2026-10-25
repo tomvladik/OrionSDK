@@ -40,10 +40,10 @@ namespace SwqlStudio.Tests
         }
 
         [Fact]
-        public void NextReconnectDelay_StaysFlatForFirstMinute_ThenGrowsByHalf_UpToFiveMinutes()
+        public void NextReconnectDelay_StaysFlatForFastWindow_ThenGrowsByHalf_UpToFiveMinutes()
         {
-            ConnectionInfo.NextReconnectDelay(TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(50)).Should().Be(TimeSpan.FromSeconds(10));
-            ConnectionInfo.NextReconnectDelay(TimeSpan.FromSeconds(10), TimeSpan.FromMinutes(1)).Should().Be(TimeSpan.FromSeconds(15));
+            ConnectionInfo.NextReconnectDelay(TimeSpan.FromSeconds(10), TimeSpan.FromMinutes(2)).Should().Be(TimeSpan.FromSeconds(10));
+            ConnectionInfo.NextReconnectDelay(TimeSpan.FromSeconds(10), TimeSpan.FromMinutes(3)).Should().Be(TimeSpan.FromSeconds(15));
             ConnectionInfo.NextReconnectDelay(TimeSpan.FromSeconds(250), TimeSpan.FromMinutes(10)).Should().Be(TimeSpan.FromMinutes(5));
             ConnectionInfo.NextReconnectDelay(TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(20)).Should().Be(TimeSpan.FromMinutes(5));
         }
@@ -80,6 +80,19 @@ namespace SwqlStudio.Tests
             ConnectionInfo.IsStaleSecuritySession(new ApplicationException(badToken.Message, badToken)).Should().BeTrue();
             ConnectionInfo.IsStaleSecuritySession(new ApplicationException(otherFault.Message, otherFault)).Should().BeFalse();
             ConnectionInfo.IsStaleSecuritySession(new ApplicationException("boom")).Should().BeFalse();
+        }
+
+        [Fact]
+        public void IsAuthenticationFailure_IgnoresExpiredSession_AfterSwisRestart()
+        {
+            var badToken = new FaultException("The security context token is expired or is not valid.",
+                new FaultCode("Sender", new FaultCode("BadContextToken", "http://schemas.xmlsoap.org/ws/2005/02/sc")));
+            var rejected = new FaultException("At least one security token in the message could not be validated.",
+                new FaultCode("Sender", new FaultCode("FailedAuthentication")));
+
+            // Stopping here would leave a valid user disconnected after every SWIS restart.
+            ConnectionInfo.IsAuthenticationFailure(new System.ServiceModel.Security.MessageSecurityException(badToken.Message, badToken)).Should().BeFalse();
+            ConnectionInfo.IsAuthenticationFailure(new System.ServiceModel.Security.MessageSecurityException(rejected.Message, rejected)).Should().BeTrue();
         }
 
         [Fact]

@@ -116,5 +116,8 @@
     <Setting Name="MaxReconnectDelay" Type="System.TimeSpan" Scope="Application">
       <Value Profile="(Default)">00:05:00</Value>
     </Setting>
+    <Setting Name="FastReconnectWindow" Type="System.TimeSpan" Scope="Application">
+      <Value Profile="(Default)">00:03:00</Value>
+    </Setting>
   </Settings>
 </SettingsFile>
