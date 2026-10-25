@@ -68,7 +68,8 @@ namespace SwqlStudio
 
         public bool ConfirmCloseEditor(QueryTab editor)
         {
-            if (!editor.Modified || ReferenceEquals(editorBeingClosedWithoutSaving, editor))
+            if (!editor.Modified || ReferenceEquals(editorBeingClosedWithoutSaving, editor) ||
+                !Settings.Default.PromptToSaveOnClose)
                 return true;
 
             ActivateEditor(editor);

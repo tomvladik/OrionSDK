@@ -21,7 +21,7 @@ namespace SwqlStudio
             var fileName = TokenRegex.Replace(pattern, match =>
             {
                 if (string.Equals(match.Value, "{entity}", StringComparison.OrdinalIgnoreCase))
-                    return entityName ?? string.Empty;
+                    return entityName?.Replace('{', '_').Replace('}', '_') ?? string.Empty;
 
                 hasTimestamp = true;
                 var format = match.Groups[1].Success ? match.Groups[1].Value : "yyyy-MM-dd HH-mm-ss";

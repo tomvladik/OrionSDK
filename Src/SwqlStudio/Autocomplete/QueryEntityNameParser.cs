@@ -1,12 +1,18 @@
 using System;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace SwqlStudio.Autocomplete
 {
     internal static class QueryEntityNameParser
     {
+        // Bracketed identifiers are matched first so quotes inside them are kept.
+        private static readonly Regex CommentOrStringRegex = new Regex(
+            @"\[[^\]]*\]|--[^\n]*|'(?:[^']|'')*'", RegexOptions.Compiled);
+
         internal static string GetPrimaryEntityName(string queryText)
         {
+            queryText = CommentOrStringRegex.Replace(queryText, m => m.Value[0] == '[' ? m.Value : " ");
             var entityName = new StringBuilder();
             var foundFrom = false;
             var afterDot = false;

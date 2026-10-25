@@ -35,6 +35,13 @@ namespace SwqlStudio.Tests
         }
 
         [Fact]
+        public void Parse_SkipsEmptySegments()
+        {
+            RecentFiles.Parse(@"C:\a.swql||C:\b.swql|")
+                .Should().Equal(@"C:\a.swql", @"C:\b.swql");
+        }
+
+        [Fact]
         public void Parse_SplitsPathsContainingSemicolons()
         {
             RecentFiles.Parse(@"C:\x;y\a.swql|C:\b.swql")
