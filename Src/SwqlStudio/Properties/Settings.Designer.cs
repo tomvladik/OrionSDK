@@ -34,7 +34,7 @@ namespace SwqlStudio.Properties {
 
         [global::System.Configuration.ApplicationScopedSettingAttribute()]
         [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
-        [global::System.Configuration.DefaultSettingValueAttribute("{timestamp:yyyy-MM-dd HH-mm} {entity}")]
+        [global::System.Configuration.DefaultSettingValueAttribute("{timestamp:yyyy-MM-dd HH-mm-ss} {entity}")]
         public string QueryFileNamePattern {
             get {
                 return ((string)(this["QueryFileNamePattern"]));

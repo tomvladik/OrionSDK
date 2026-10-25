@@ -21,7 +21,7 @@ namespace SwqlStudio.Tests
             var timestamp = new DateTime(2024, 1, 2, 3, 4, 0);
 
             QueryFileNamePattern.Format(QueryFileNamePattern.DefaultPattern, "Orion.Nodes", timestamp)
-                .Should().Be("2024-01-02 03-04 Orion.Nodes.swql");
+                .Should().Be("2024-01-02 03-04-00 Orion.Nodes.swql");
         }
 
         [Fact]

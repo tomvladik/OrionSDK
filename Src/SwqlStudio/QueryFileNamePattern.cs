@@ -7,7 +7,7 @@ namespace SwqlStudio
 {
     internal static class QueryFileNamePattern
     {
-        internal const string DefaultPattern = "{timestamp:yyyy-MM-dd HH-mm} {entity}";
+        internal const string DefaultPattern = "{timestamp:yyyy-MM-dd HH-mm-ss} {entity}";
 
         private static readonly Regex TokenRegex = new Regex(
             @"\{timestamp(?::([^{}]+))?\}|\{entity\}", RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -24,7 +24,7 @@ namespace SwqlStudio
                     return entityName ?? string.Empty;
 
                 hasTimestamp = true;
-                var format = match.Groups[1].Success ? match.Groups[1].Value : "yyyy-MM-dd HH-mm";
+                var format = match.Groups[1].Success ? match.Groups[1].Value : "yyyy-MM-dd HH-mm-ss";
                 return timestamp.ToString(format, CultureInfo.InvariantCulture);
             });
 
