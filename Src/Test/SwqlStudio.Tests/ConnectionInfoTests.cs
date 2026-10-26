@@ -288,12 +288,196 @@ namespace SwqlStudio.Tests
             }
         }
 
+        private static void WithoutSyncContext(Action action)
+        {
+            var previous = SynchronizationContext.Current;
+            SynchronizationContext.SetSynchronizationContext(null);
+            try
+            {
+                action();
+            }
+            finally
+            {
+                SynchronizationContext.SetSynchronizationContext(previous);
+            }
+        }
+
+        [Fact]
+        public void Close_RaisesClosingAndClosed_AfterTheProxyWasDropped()
+        {
+            WithoutSyncContext(() =>
+            {
+                var info = new TestConnectionInfo(infoService: new FakeInfoService { FirstProxyOpens = true });
+                info.Connect();
+                info.ProbeServer();
+                info.Proxy.Should().BeNull("the probe drops a proxy whose server does not answer");
+
+                int closing = 0, closed = 0;
+                info.ConnectionClosing += (s, e) => closing++;
+                info.ConnectionClosed += (s, e) => closed++;
+
+                // Otherwise the server stays listed after the user disconnects it.
+                info.Close();
+
+                closing.Should().Be(1);
+                closed.Should().Be(1);
+                info.Connection.Should().BeNull();
+            });
+        }
+
+        [Fact]
+        public void Close_RaisesEventsOnlyOnce()
+        {
+            WithoutSyncContext(() =>
+            {
+                var info = new TestConnectionInfo(infoService: new FakeInfoService { FirstProxyOpens = true });
+                info.Connect();
+
+                int closing = 0;
+                info.ConnectionClosing += (s, e) => closing++;
+
+                info.Close();
+                info.Close();
+
+                closing.Should().Be(1);
+            });
+        }
+
+        [Fact]
+        public void Close_DoesNotHoldTheLock_WhileRaisingEvents()
+        {
+            WithoutSyncContext(() =>
+            {
+                var info = new TestConnectionInfo(infoService: new FakeInfoService { FirstProxyOpens = true });
+                info.Connect();
+
+                bool closingUnblocked = false, closedUnblocked = false;
+                info.ConnectionClosing += (s, e) =>
+                    closingUnblocked = System.Threading.Tasks.Task.Run(() => info.IsConnected).Wait(TimeSpan.FromSeconds(2));
+                info.ConnectionClosed += (s, e) =>
+                    closedUnblocked = System.Threading.Tasks.Task.Run(() => info.IsConnected).Wait(TimeSpan.FromSeconds(2));
+
+                info.Close();
+
+                closingUnblocked.Should().BeTrue();
+                closedUnblocked.Should().BeTrue();
+            });
+        }
+
+        [Fact]
+        public void TryReconnect_InstallsTheReplacement_AndDisposesTheOldProxy()
+        {
+            WithoutSyncContext(() =>
+            {
+                var service = new FakeInfoService { AllProxiesOpen = true };
+                var info = new TestConnectionInfo(infoService: service);
+                info.Connect();
+                var oldProxy = (LocalHttpProxy)info.Proxy;
+                var oldConnection = info.Connection;
+
+                int? generation = info.TryReconnect(CancellationToken.None);
+
+                generation.Should().HaveValue();
+                info.Proxy.Should().NotBeSameAs(oldProxy);
+                info.Connection.Should().NotBeSameAs(oldConnection);
+                oldProxy.WasDisposed.Should().BeTrue();
+                info.Close();
+            });
+        }
+
+        [Fact]
+        public void TryReconnect_DiscardsTheReplacement_WhenClosedWhileOpening()
+        {
+            WithoutSyncContext(() =>
+            {
+                var service = new FakeInfoService { AllProxiesOpen = true };
+                var info = new TestConnectionInfo(infoService: service);
+                info.Connect();
+
+                service.OnCreateProxy = () => info.Close();
+
+                int? generation = info.TryReconnect(CancellationToken.None);
+
+                generation.Should().NotHaveValue();
+                info.Proxy.Should().BeNull("a reconnect must not reopen a connection the user closed");
+                service.LastOpenedProxy.WasDisposed.Should().BeTrue();
+            });
+        }
+
+        [Fact]
+        public void TryReconnect_KeepsTheLiveProxy_WhenOpeningTheReplacementFails()
+        {
+            WithoutSyncContext(() =>
+            {
+                var service = new FakeInfoService { FirstProxyOpens = true };
+                var info = new TestConnectionInfo(infoService: service);
+                info.Connect();
+                var liveProxy = info.Proxy;
+
+                int? generation = info.TryReconnect(CancellationToken.None);
+
+                generation.Should().NotHaveValue();
+                info.Proxy.Should().BeSameAs(liveProxy);
+                service.LastProxy.WasDisposed.Should().BeTrue();
+                info.Close();
+            });
+        }
+
+        [Fact]
+        public void OAuthConstructor_DispatchesEvents_ToTheCreatingContext()
+        {
+            var previous = SynchronizationContext.Current;
+            var context = new RecordingSynchronizationContext();
+            SynchronizationContext.SetSynchronizationContext(context);
+            OAuthStyleConnectionInfo info;
+            try
+            {
+                info = new OAuthStyleConnectionInfo(new FakeInfoService());
+            }
+            finally
+            {
+                SynchronizationContext.SetSynchronizationContext(previous);
+            }
+
+            bool raised = false;
+            info.ConnectionRestored += (s, e) => raised = true;
+
+            // UI handlers would otherwise run on the keep-alive thread.
+            info.TriggerRestored();
+
+            raised.Should().BeFalse();
+            context.Posted.Should().Be(1);
+        }
+
+        [Fact]
+        public void QueryXml_ReconnectsInsteadOfFailingWithNullReference_WhenTheProxyIsDroppedConcurrently()
+        {
+            WithoutSyncContext(() =>
+            {
+                var service = new FakeInfoService { AllProxiesOpen = true };
+
+                // Reports connected while no proxy is installed, as when the monitor drops it after the check.
+                var info = new TestConnectionInfo(infoService: service) { ConnectedOverride = true };
+
+                Action act = () => info.QueryXml("SELECT 1 FROM Metadata.Entity", out _, out _, out _);
+
+                act.Should().Throw<ApplicationException>()
+                    .Where(e => !(e.InnerException is NullReferenceException));
+                service.CreateProxyCount.Should().Be(1, "the lost connection is retried through Connect()");
+                info.Close();
+            });
+        }
+
         private class TestConnectionInfo : ConnectionInfo
         {
             public TestConnectionInfo(string server = "localhost", string user = "user", string pass = "pass", string type = "Orion (v3)", FakeInfoService infoService = null)
                 : base(server, user, pass, type, infoService ?? new FakeInfoService())
             {
             }
+
+            public bool? ConnectedOverride { get; set; }
+
+            public override bool IsConnected => ConnectedOverride ?? base.IsConnected;
 
             public void TriggerRestored() => OnConnectionRestored();
 
@@ -324,9 +508,13 @@ namespace SwqlStudio.Tests
             /// <summary>Makes the first proxy openable, so a later Connect() has a live proxy to replace.</summary>
             public bool FirstProxyOpens { get; set; }
 
+            public bool AllProxiesOpen { get; set; }
+
             public UnopenableProxy LastProxy { get; private set; }
 
             public InfoServiceProxy OpenedProxy { get; private set; }
+
+            public LocalHttpProxy LastOpenedProxy { get; private set; }
 
             public int CreateProxyCount { get; private set; }
 
@@ -337,10 +525,11 @@ namespace SwqlStudio.Tests
                 CreateProxyCount++;
                 OnCreateProxy?.Invoke();
 
-                if (FirstProxyOpens && CreateProxyCount == 1)
+                if (AllProxiesOpen || (FirstProxyOpens && CreateProxyCount == 1))
                 {
-                    OpenedProxy = new LocalHttpProxy(_credentials);
-                    return OpenedProxy;
+                    LastOpenedProxy = new LocalHttpProxy(_credentials);
+                    OpenedProxy = OpenedProxy ?? LastOpenedProxy;
+                    return LastOpenedProxy;
                 }
 
                 LastProxy = new UnopenableProxy(_credentials);
@@ -354,6 +543,14 @@ namespace SwqlStudio.Tests
             public LocalHttpProxy(ServiceCredentials credentials)
                 : base(new Uri("http://127.0.0.1:1/unused"), CreateBinding(), credentials)
             {
+            }
+
+            public bool WasDisposed { get; private set; }
+
+            protected override void Dispose(bool disposing)
+            {
+                WasDisposed = true;
+                base.Dispose(disposing);
             }
 
             // Disposal probes the dead endpoint; skipping proxy discovery keeps that from taking seconds.
@@ -394,6 +591,23 @@ namespace SwqlStudio.Tests
             {
                 // no-op for tests
             }
+        }
+
+        private class OAuthStyleConnectionInfo : ConnectionInfo
+        {
+            public OAuthStyleConnectionInfo(InfoServiceBase infoService)
+                : base("localhost", "user", infoService)
+            {
+            }
+
+            public void TriggerRestored() => OnConnectionRestored();
+        }
+
+        private class RecordingSynchronizationContext : SynchronizationContext
+        {
+            public int Posted { get; private set; }
+
+            public override void Post(SendOrPostCallback d, object state) => Posted++;
         }
     }
 }

@@ -147,6 +147,23 @@ namespace SwqlStudio
 
         private void ConnectionStateChanged(object sender, EventArgs e)
         {
+            if (IsDisposed || Disposing)
+                return;
+
+            if (InvokeRequired)
+            {
+                try
+                {
+                    BeginInvoke(new EventHandler(ConnectionStateChanged), sender, e);
+                }
+                catch (ObjectDisposedException)
+                {
+                    // Form closed between the check and the marshalling call.
+                }
+
+                return;
+            }
+
             var connection = sender as ConnectionInfo;
             if (connection != SelectedConnection)
                 return;
@@ -438,6 +455,8 @@ namespace SwqlStudio
 
         private void connectionsCombobox_SelectedIndexChanged(object sender, EventArgs e)
         {
+            UpdateExecuteVisual(SelectedConnection);
+
             IConnectionTab activeConnectionTab = filesDock.ActiveConnectionTab;
             if (activeConnectionTab != null && SelectedConnection != null)
             {

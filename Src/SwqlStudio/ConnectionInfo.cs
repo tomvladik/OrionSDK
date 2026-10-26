@@ -26,6 +26,11 @@ namespace SwqlStudio
         private static readonly TimeSpan InitialReconnectDelay = PositiveOrDefault(Settings.Default.InitialReconnectDelay, TimeSpan.FromSeconds(10));
         private static readonly TimeSpan MaxReconnectDelay = PositiveOrDefault(Settings.Default.MaxReconnectDelay, TimeSpan.FromMinutes(5));
 
+        // SWIS can take minutes to come back after a restart, so keep retrying fast until then; zero disables it.
+        private static readonly TimeSpan FastReconnectWindow = Settings.Default.FastReconnectWindow >= TimeSpan.Zero
+            ? Settings.Default.FastReconnectWindow
+            : TimeSpan.FromMinutes(3);
+
         public string ServerType { get; set; }
         private string _server;
         private string _username;
@@ -72,6 +77,7 @@ namespace SwqlStudio
 
             _infoServiceType = infoService;
             QueryParameters = new PropertyBag();
+            _syncContext = SynchronizationContext.Current;
         }
 
         public Binding Binding
@@ -295,7 +301,7 @@ namespace SwqlStudio
                             int? committedGeneration;
                             try
                             {
-                                committedGeneration = await TryReconnectAsync(ct);
+                                committedGeneration = TryReconnect(ct);
                             }
                             catch (Exception ex) when (IsAuthenticationFailure(ex))
                             {
@@ -332,11 +338,6 @@ namespace SwqlStudio
                 log.Error($"Keep-alive monitor for {_server} stopped unexpectedly", ex);
             }
         }
-
-        // SWIS can take minutes to come back after a restart, so keep retrying fast until then; zero disables it.
-        private static readonly TimeSpan FastReconnectWindow = Settings.Default.FastReconnectWindow >= TimeSpan.Zero
-            ? Settings.Default.FastReconnectWindow
-            : TimeSpan.FromMinutes(3);
 
         internal static TimeSpan NextReconnectDelay(TimeSpan current, TimeSpan outageDuration)
         {
@@ -463,7 +464,7 @@ namespace SwqlStudio
         }
 
         /// <summary>Returns the generation it committed, or null when the attempt failed or lost the race.</summary>
-        private async Task<int?> TryReconnectAsync(CancellationToken ct)
+        internal int? TryReconnect(CancellationToken ct)
         {
             InfoServiceProxy newProxy = null;
             InformationServiceConnection newConnection = null;
@@ -562,17 +563,28 @@ namespace SwqlStudio
             }
         }
 
-        private void EnsureConnection()
+        /// <summary>Returns the live proxy and connection as one snapshot; the monitor may replace or drop them at any time.</summary>
+        private InfoServiceProxy EnsureConnection(out InformationServiceConnection connection)
         {
             if (!IsConnected)
                 Connect();
+
+            lock (_proxyLock)
+            {
+                // Plain CommunicationException is what ExecuteWithReAuth treats as "reconnect and retry".
+                if (_proxy == null || Connection == null)
+                    throw new CommunicationException($"Connection to {_server} was lost.");
+
+                connection = Connection;
+                return _proxy;
+            }
         }
 
         public IEnumerable<T> Query<T>(string swql) where T : new()
         {
-            EnsureConnection();
+            var proxy = EnsureConnection(out _);
 
-            using (var context = new InformationServiceContext(_proxy))
+            using (var context = new InformationServiceContext(proxy))
             using (var serviceQuery = context.CreateQuery<T>(swql))
             {
                 var enumerator = serviceQuery.GetEnumerator();
@@ -598,10 +610,10 @@ namespace SwqlStudio
             DataTable result = ExecuteWithReAuth(
                 delegate
                     {
-                        EnsureConnection();
+                        EnsureConnection(out var connection);
 
                         using (var context = new SwisSettingsContext { DataProviderTimeout = Settings.Default.DataProviderTimeout })
-                        using (InformationServiceCommand command = new InformationServiceCommand(swql, Connection) { ApplicationTag = "SWQL Studio" })
+                        using (InformationServiceCommand command = new InformationServiceCommand(swql, connection) { ApplicationTag = "SWQL Studio" })
                         {
                             foreach (var param in QueryParameters)
                                 command.Parameters.AddWithValue(param.Key, param.Value);
@@ -743,9 +755,9 @@ namespace SwqlStudio
             errorMessages = null;
             ExecuteWithReAuth<int>(delegate
             {
-                EnsureConnection();
+                var proxy = EnsureConnection(out _);
                 using (new SwisSettingsContext { DataProviderTimeout = TimeSpan.FromSeconds(30), ApplicationTag = "SWQL Studio", AppendErrors = true })
-                    results = _proxy.Query(new QueryXmlRequest(query, QueryParameters));
+                    results = proxy.Query(new QueryXmlRequest(query, QueryParameters));
                 return 0;
             });
 
@@ -808,26 +820,45 @@ namespace SwqlStudio
 
         public void Close()
         {
+            bool wasOpen;
             lock (_proxyLock)
             {
+                if (_isClosed)
+                    return;
+
                 // Set before anything else so a reconnect already in flight refuses to commit.
                 _isClosed = true;
                 _connectionGeneration++;
                 StopKeepAlive();
 
-                if (_proxy == null)
+                // A dropped connection has no proxy but is still listed and must be closed like a live one.
+                wasOpen = _proxy != null || Connection != null;
+            }
+
+            if (!wasOpen)
+                return;
+
+            // Raised outside the lock: the handlers tear down UI, which must not run while the monitor is blocked.
+            ConnectionClosing?.Invoke(this, EventArgs.Empty);
+
+            InformationServiceConnection connection;
+            InfoServiceProxy proxy;
+            lock (_proxyLock)
+            {
+                // A Connect() from a Closing handler reopened it; leave the new connection alone.
+                if (!_isClosed)
                     return;
 
-                ConnectionClosing?.Invoke(this, EventArgs.Empty);
-
-                DisposeQuietly(Connection);
+                connection = Connection;
                 Connection = null;
-
-                DisposeQuietly(_proxy);
+                proxy = _proxy;
                 _proxy = null;
-
-                ConnectionClosed?.Invoke(this, EventArgs.Empty);
             }
+
+            DisposeQuietly(connection);
+            DisposeQuietly(proxy);
+
+            ConnectionClosed?.Invoke(this, EventArgs.Empty);
         }
 
         internal ConnectionInfo Copy()

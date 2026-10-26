@@ -78,18 +78,19 @@ namespace SwqlStudio
         /// <summary>Shows the connection state, which is the status bar's idle text.</summary>
         public void ShowConnectionState()
         {
+            bool disconnected = _connection != null && !_connection.IsConnected;
+
             if (_connection == null)
                 _connectionLabel.Text = NotAvailable;
             else
-                _connectionLabel.Text = _connection.IsConnected ? Connected : Disconnected;
+                _connectionLabel.Text = disconnected ? Disconnected : Connected;
 
-            ApplyConnectionLabelStyle();
+            ApplyConnectionLabelStyle(disconnected);
         }
 
         // Same gold as the execute button while disconnected; bold keeps it distinguishable without colour.
-        private void ApplyConnectionLabelStyle()
+        private void ApplyConnectionLabelStyle(bool warn)
         {
-            bool warn = _connectionLabel.Text == Disconnected;
             IsDisconnectedHighlighted = warn;
 
             if (warn)
@@ -138,7 +139,7 @@ namespace SwqlStudio
         public void UpdateStatusLabel(string text)
         {
             _connectionLabel.Text = text;
-            ApplyConnectionLabelStyle();
+            ApplyConnectionLabelStyle(false);
         }
 
         internal string ConnectionStatus => _connectionLabel.Text;
