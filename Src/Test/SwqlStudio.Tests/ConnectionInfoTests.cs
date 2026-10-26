@@ -49,6 +49,29 @@ namespace SwqlStudio.Tests
         }
 
         [Fact]
+        public void DescribeConnectionFailure_NamesTheFailingPart_AndKeepsTheDetails()
+        {
+            ApplicationException Wrap(Exception inner) => new ApplicationException(inner.Message, inner);
+            var rejected = new FaultException("At least one security token in the message could not be validated.",
+                new FaultCode("Sender", new FaultCode("FailedAuthentication")));
+
+            ConnectionInfo.DescribeConnectionFailure(Wrap(new EndpointNotFoundException("TCP error code 10060")))
+                .Should().StartWith("The server could not be reached.").And.Contain("TCP error code 10060");
+            ConnectionInfo.DescribeConnectionFailure(Wrap(new EndpointNotFoundException(
+                    "Could not connect to net.tcp://my-orion:17777/SolarWinds/InformationService/v3/Orion/ssl. The connection attempt lasted for a time span of 00:00:21.0534225. TCP error code 10060")))
+                .Should().StartWith("Server 'my-orion' did not respond on port 17777 (timed out after 21 s).");
+            ConnectionInfo.DescribeConnectionFailure(Wrap(new TimeoutException(
+                    "Connecting to via net.tcp://my-orion:17777/SolarWinds/InformationService/v3/Orion/ssl timed out after 00:00:05. Connection attempts were made to 1 of 1 available addresses (10.0.0.1:17777).")))
+                .Should().StartWith("Server 'my-orion' did not respond on port 17777 (timed out after 5 s).");
+            ConnectionInfo.DescribeConnectionFailure(Wrap(rejected))
+                .Should().StartWith("The server rejected the user name or password.");
+            ConnectionInfo.DescribeConnectionFailure(Wrap(new System.ServiceModel.Security.SecurityAccessDeniedException("denied")))
+                .Should().StartWith("The server rejected the user name or password.");
+            ConnectionInfo.DescribeConnectionFailure(Wrap(new InvalidOperationException("boom")))
+                .Should().Be("Unable to connect to Information Service.\nboom");
+        }
+
+        [Fact]
         public void PositiveOrDefault_FallsBack_ForNonPositiveConfigValues()
         {
             var fallback = TimeSpan.FromSeconds(10);

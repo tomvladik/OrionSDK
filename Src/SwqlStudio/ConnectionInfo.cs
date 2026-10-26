@@ -1,12 +1,14 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Data;
+using System.Globalization;
 using System.IO;
 using System.ServiceModel;
 using System.ServiceModel.Channels;
 using System.ServiceModel.Security;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Text.RegularExpressions;
 using System.Xml;
 using System.Xml.Serialization;
 using SolarWinds.InformationService.Contract2;
@@ -368,6 +370,58 @@ namespace SwqlStudio
         private static bool IsBadContextToken(Exception ex)
         {
             return ex is FaultException fault && fault.Code?.SubCode?.Name == "BadContextToken";
+        }
+
+        /// <summary>Turns a failed connect into a message that says which part failed, keeping the raw text as details.</summary>
+        internal static string DescribeConnectionFailure(Exception ex)
+        {
+            var cause = ex is ApplicationException && ex.InnerException != null ? ex.InnerException : ex;
+
+            string summary;
+            if (cause is EndpointNotFoundException || cause is TimeoutException)
+                summary = $"{DescribeUnreachableServer(cause.Message)} Check the server name, that SolarWinds Information Service is running, and that no firewall or VPN blocks the connection.";
+            else if (IsCredentialRejection(cause))
+                summary = "The server rejected the user name or password.";
+            else if (cause is SecurityNegotiationException)
+                summary = "A secure connection could not be established. Check the credentials and the selected server type.";
+            else
+                return $"Unable to connect to Information Service.\n{ex.Message}";
+
+            return $"{summary}\n\nDetails: {ex.Message}";
+        }
+
+        // WCF only reports the endpoint and the wait inside the message text.
+        private static readonly Regex EndpointPattern = new Regex(@"\b(?:net\.tcp|https?)://(?<host>[^/:\s]+)(?::(?<port>\d+))?", RegexOptions.IgnoreCase);
+        private static readonly Regex WaitPattern = new Regex(@"(?:time span of|timed out after) (?<wait>\d{2}:\d{2}:\d{2}(?:\.\d+)?)");
+
+        private static string DescribeUnreachableServer(string message)
+        {
+            var endpoint = EndpointPattern.Match(message ?? string.Empty);
+            if (!endpoint.Success)
+                return "The server could not be reached.";
+
+            string target = endpoint.Groups["port"].Success
+                ? $"Server '{endpoint.Groups["host"].Value}' did not respond on port {endpoint.Groups["port"].Value}"
+                : $"Server '{endpoint.Groups["host"].Value}' did not respond";
+
+            var wait = WaitPattern.Match(message);
+            if (wait.Success && TimeSpan.TryParse(wait.Groups["wait"].Value, CultureInfo.InvariantCulture, out var elapsed))
+                return $"{target} (timed out after {Math.Round(elapsed.TotalSeconds)} s).";
+
+            return $"{target}.";
+        }
+
+        private static bool IsCredentialRejection(Exception ex)
+        {
+            if (ex is SecurityAccessDeniedException)
+                return true;
+
+            if (ex is MessageSecurityException)
+                return !IsBadContextToken(ex.InnerException);
+
+            // DoWithExceptionTranslation unwraps MessageSecurityException to its fault.
+            var subCode = (ex as FaultException)?.Code?.SubCode?.Name;
+            return subCode == "FailedAuthentication" || subCode == "InvalidSecurity";
         }
 
         /// <summary>Returns false when SWIS rejected the credentials, so automatic reconnect must stop.</summary>
